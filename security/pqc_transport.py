@@ -1,6 +1,7 @@
 import oqs
 import hashlib
 import os
+import time
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -34,6 +35,8 @@ class PQCTransport:
         public_key
     ):
 
+        start = time.perf_counter()
+
         sender = oqs.KeyEncapsulation(
             self.kem_alg
         )
@@ -42,7 +45,9 @@ class PQCTransport:
             public_key
         )
 
-        return ciphertext, shared_secret
+        latency = (time.perf_counter() - start) * 1000
+
+        return ciphertext, shared_secret, latency
 
     # =====================================================
     # Edge decapsulates
@@ -54,11 +59,15 @@ class PQCTransport:
         ciphertext
     ):
 
+        start = time.perf_counter()
+
         shared_secret = receiver.decap_secret(
             ciphertext
         )
 
-        return shared_secret
+        latency = (time.perf_counter() - start) * 1000
+
+        return shared_secret, latency
 
     # =====================================================
     # AES-256 Key

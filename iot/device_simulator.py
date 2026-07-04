@@ -131,11 +131,11 @@ for i in range(WINDOW_SIZE - 1, len(test_df)):
 
         print("\nObtaining Edge Public Key...")
 
-        kem_ciphertext, shared_secret = kem_client.encapsulate()
+        kem_ciphertext, shared_secret, kem_time = kem_client.encapsulate()
 
         print("SUCCESS")
 
-        print("\nML-KEM-512 Encapsulation...")
+        print(f"\nML-KEM Encapsulation Time : {kem_time:.3f} ms")
         print("SUCCESS")
 
         session_key = derive_session_key(

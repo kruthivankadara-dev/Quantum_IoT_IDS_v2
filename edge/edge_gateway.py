@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
@@ -9,6 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from flask import Flask, request, jsonify
+from security.verify_signature import verify_packet
 
 import torch
 import torch.nn as nn
@@ -384,6 +386,8 @@ def scan():
 
     data = request.json
 
+    performance = {}
+
     device_id = data.get("device_id", "unknown")
 
     status = data.get("status", "UNKNOWN")
@@ -433,8 +437,6 @@ def scan():
 
         }), BLOCK_RESPONSE_CODE
 
-    print("\nDecision         : Continue to AI Engine")
-
     # ==========================================
     # AES-256-GCM DECRYPTION
     # ==========================================
@@ -451,15 +453,46 @@ def scan():
        data["nonce"]
     )
 
-    shared_secret = kem_server.decapsulate(kem_ciphertext)
+    shared_secret, kem_decap_time = kem_server.decapsulate(
+    kem_ciphertext
+    )
+    
+    print("\n==================================================")
+    print("POST-QUANTUM TRANSPORT")
+    print("==================================================")
+
+    print("Algorithm               : ML-KEM-512")
+
+    print(f"Public Key Size         : {len(GatewayKeys.load_public_key())} Bytes")
+
+    print(f"Ciphertext Size         : {len(kem_ciphertext)} Bytes")
+
+    print(f"Shared Secret Size      : {len(shared_secret)} Bytes")
+
+    print(f"Decapsulation Time      : {kem_decap_time:.3f} ms")
+
+    performance["ML-KEM Decapsulation"] = kem_decap_time
 
     session_key = derive_session_key(shared_secret)
 
+    fingerprint = hashlib.sha256(session_key).hexdigest()[:16].upper()
+
+    print()
+
+    print("Session Key Fingerprint")
+
+    print(fingerprint + "...")
+    aes_start = time.perf_counter()
+
     packet = decrypt_packet(
-    ciphertext=ciphertext,
-    nonce=nonce,
-    session_key=session_key
+        ciphertext=ciphertext,
+        nonce=nonce,
+        session_key=session_key
     )
+
+    performance["AES-256-GCM Decryption"] = (
+        time.perf_counter() - aes_start
+    ) * 1000
 
     packet_window = packet["packet_window"]
 
@@ -494,21 +527,24 @@ def scan():
         WINDOW_SIZE * FEATURE_COUNT
     )
 
+    ae_start = time.perf_counter()
+
     with torch.no_grad():
 
         reconstructed = autoencoder(
-            flat_packet_tensor
-        )
+        flat_packet_tensor
+    )
 
         reconstruction_error = torch.mean(
+        (
+            flat_packet_tensor -
+            reconstructed
+        ) ** 2
+    ).item()
 
-            (
-                flat_packet_tensor -
-                reconstructed
-
-            ) ** 2
-
-        ).item()
+    performance["Autoencoder Inference"] = (
+    time.perf_counter() - ae_start
+) * 1000
 
     # ===========================
     # CNN-LSTM
@@ -530,11 +566,17 @@ def scan():
 
     )
 
+    cnn_start = time.perf_counter()
+
     with torch.no_grad():
 
-        threat_score = edge_model(
-            x
-        ).item()
+         threat_score = edge_model(
+        x
+    ).item()
+
+    performance["CNN-LSTM Inference"] = (
+    time.perf_counter() - cnn_start
+) * 1000
 
     print(
         f"[EDGE] Threat Score : {threat_score:.4f}"
@@ -599,16 +641,31 @@ def scan():
                 f"[EDGE] Buffer Count : {packet_count}"
 
             )
+        
+        print("\n==================================================")
+        print("PERFORMANCE METRICS")
+        print("==================================================")
+
+        total_latency = 0
+
+        for name, value in performance.items():
+
+            print(f"{name:<30}: {value:.3f} ms")
+
+            total_latency += value
+
+        print("-----------------------------------------------")
+        print(f"{'Measured Total':<30}: {total_latency:.3f} ms")
 
         return jsonify({
 
-            "status":"benign",
+                "status":"benign",
 
-            "score":threat_score,
+                "score":threat_score,
 
-            "reconstruction_error":reconstruction_error
+                "reconstruction_error":reconstruction_error
 
-        })
+            })
 
     # ===========================
     # ATTACK
@@ -618,8 +675,41 @@ def scan():
     print("EDGE AI ENGINE")
     print("==================================================")
 
-    print(f"CNN-LSTM Score        : {threat_score:.4f}")
-    print(f"Autoencoder Error     : {reconstruction_error:.6f}")
+    print("Telemetry Preprocessing : SUCCESS")
+
+    print("Feature Scaling         : SUCCESS")
+
+    print(f"Feature Count           : {FEATURE_COUNT}")
+
+    print(f"Sliding Window          : {WINDOW_SIZE}")
+
+    print("----------------------------------------")
+
+    print("CNN Feature Extraction  : COMPLETE")
+
+    print("Temporal Analysis       : COMPLETE")
+
+    print(f"CNN Threat Score        : {threat_score:.4f}")
+
+    print("----------------------------------------")
+
+    print("Autoencoder Analysis    : COMPLETE")
+
+    print(f"Reconstruction Error    : {reconstruction_error:.6f}")
+
+    print("----------------------------------------")
+
+    if (
+    threat_score >= THREAT_THRESHOLD
+    or
+    reconstruction_error >= RECONSTRUCTION_THRESHOLD
+    ):
+
+       print("Evidence Status         : ATTACK DETECTED")
+
+    else:
+
+       print("Evidence Status         : BENIGN")
 
     print("\n==================================================")
     print("CGEA")
@@ -681,30 +771,136 @@ def scan():
     "model_version": CURRENT_VERSION
     }
     
+    sign_start = time.perf_counter()
+
     secured_evidence = evidence_security.create_signed_evidence(
     evidence
-    )
+)
+
+    performance["ML-DSA Signing"] = (
+    time.perf_counter() - sign_start
+) * 1000
+
     evidence_hash = secured_evidence["evidence_hash"]
+    
 
     signature = secured_evidence["signature"]
 
     public_key = secured_evidence["public_key"]
+
+    verify_start = time.perf_counter()
+
+    evidence_bytes = json.dumps(
+
+    evidence,
+
+    sort_keys=True,
+
+    separators=(",", ":")
+
+).encode()
+
+    verification_result = verify_packet(
+
+    evidence_bytes,
+
+    bytes.fromhex(signature),
+
+    bytes.fromhex(public_key)
+
+)
     
+    performance["ML-DSA Verification"] = (
+    time.perf_counter() - verify_start
+) * 1000
+
     print("\n==================================================")
-    print("EVIDENCE GENERATION")
+    print("SHA-256 EVIDENCE")
     print("==================================================")
 
-    print(f"Device ID             : {device_id}")
-    print(f"Threat Score          : {threat_score:.4f}")
+    print("Evidence Generated Successfully")
 
-    print("\nSHA-256 Evidence Hash")
+    print()
+
+    print("Hash Algorithm         : SHA-256")
+
+    print(f"Hash Length            : {len(bytes.fromhex(evidence_hash)) * 8} bits")
+
+    print()
+
+    print("Evidence Hash")
 
     print(evidence_hash)
 
-    print("\nML-DSA Signature")
+    print()
 
-    print("Generated Successfully")
+    print("==================================================")
+    print("ML-DSA DIGITAL SIGNATURE")
+    print("==================================================")
 
+    print("Algorithm              : ML-DSA-65")
+
+    public_key_bytes = bytes.fromhex(public_key)
+
+    signature_bytes = bytes.fromhex(signature)
+
+    print(f"Public Key Size        : {len(public_key_bytes)} Bytes")
+
+    fingerprint = hashlib.sha256(public_key_bytes).hexdigest()[:16].upper()
+
+    print(f"Public Key Fingerprint : {fingerprint}...")
+
+    print(f"Signature Size         : {len(signature_bytes)} Bytes")
+
+    print(f"Signing Time           : {performance['ML-DSA Signing']:.3f} ms")
+
+    print()
+
+    print("==================================================")
+    print("ML-DSA VERIFICATION")
+    print("==================================================")
+
+    print("Verifying Signature...")
+
+    print()
+
+    print(f"Verification Time      : {performance['ML-DSA Verification']:.3f} ms")
+
+    print()
+
+    print(
+        f"Result                 : {'VALID' if verification_result else 'INVALID'}"
+    )
+
+    print(
+        f"Integrity              : {'VERIFIED' if verification_result else 'FAILED'}"
+    )
+
+    print(
+       f"Authenticity           : {'VERIFIED' if verification_result else 'FAILED'}"
+    )
+
+    if verification_result:
+
+        print()
+
+        print("Evidence Accepted")
+
+    else:
+
+        print()
+
+        print("Evidence Rejected")
+
+    if not verification_result:
+
+        print("\nSignature Verification Failed")
+
+        return jsonify({
+
+            "status": "invalid_signature"
+
+        }),401
     attack_payload = {
 
     "type": "attack",
@@ -786,31 +982,12 @@ def scan():
         print("[EDGE] Cloud Offline")
         print("[EDGE] Summary Added To Retry Queue")
 
-        print("\n==================================================")
-        print("TRUST UPDATE")
-        print("==================================================")
-
-        updated = registry.get_device(device_id)
-
-        print(f"Trust State           : {updated['trust_state']}")
-        print(f"Attack Count          : {updated['attack_count']}")
-        print(f"Current Decision      : {status}")
-
-        return jsonify({
-
-            "status": "queued",
-
-            "evidence_hash": evidence_hash
-
-        })
-
     except requests.exceptions.HTTPError as e:
 
         print("\n==================================================")
         print("CLOUD SERVER ERROR")
         print("==================================================")
         print(response.text)
-
         raise e
 
 
@@ -890,6 +1067,21 @@ def scan():
     print(f"Attack Count          : {updated['attack_count']}")
     print(f"Current Decision      : {status}")
 
+    print("\n==================================================")
+    print("PERFORMANCE METRICS")
+    print("==================================================")
+
+    total_latency = 0
+
+    for name, value in performance.items():
+
+        print(f"{name:<30}: {value:.3f} ms")
+
+        total_latency += value
+
+    print("-----------------------------------------------")
+    print(f"{'Measured Total':<30}: {total_latency:.3f} ms")
+    
     return jsonify({
 
     "status": status,

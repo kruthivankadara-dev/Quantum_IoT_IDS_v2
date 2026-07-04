@@ -1,3 +1,4 @@
+import time
 import oqs
 
 from security.gateway_keys import GatewayKeys
@@ -16,10 +17,14 @@ class KEMClient:
 
     def encapsulate(self):
 
+        start = time.perf_counter()
+
         kem = oqs.KeyEncapsulation(self.KEM_ALGORITHM)
 
         kem_ciphertext, shared_secret = kem.encap_secret(
             self.public_key
         )
 
-        return kem_ciphertext, shared_secret
+        latency = (time.perf_counter() - start) * 1000
+
+        return kem_ciphertext, shared_secret, latency
