@@ -1,9 +1,16 @@
 import pandas as pd
 import requests
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import os
+import sys
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from security.kem_client import KEMClient
 from security.aes_session import derive_session_key, encrypt_packet
+
 
 EDGE_URL = "http://localhost:5001/scan"
 DATASET = "dataset/CICIOT23/test/test.csv"

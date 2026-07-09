@@ -4,6 +4,7 @@
 
 EDGE_PORT = 5001
 CLOUD_PORT = 8001
+EDGE_CLUSTER_ID = "edge-cluster-1"
 
 # ==========================================
 # AI THRESHOLDS
