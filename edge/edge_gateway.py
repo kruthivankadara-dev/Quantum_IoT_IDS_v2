@@ -47,7 +47,6 @@ sys.path.append(
 )
 
 from shared.model import CNNLSTMModel
-from shared.autoencoder import AutoEncoder
 from shared.config import *
 
 from edge.device_registry import DeviceRegistry
@@ -83,23 +82,6 @@ edge_model.load_state_dict(
 )
 
 edge_model.eval()
-
-# ===========================
-# LOAD AUTOENCODER
-# ===========================
-
-print("[EDGE] Loading Autoencoder...")
-
-autoencoder = AutoEncoder()
-
-autoencoder.load_state_dict(
-    torch.load(
-        AUTOENCODER_PATH,
-        map_location="cpu"
-    )
-)
-
-autoencoder.eval()
 
 # ===========================
 # LOAD SCALER
@@ -490,6 +472,12 @@ def scan():
         session_key=session_key
     )
 
+    print("\n========== DEBUG ==========")
+    print("Window received :", len(packet["packet_window"]))
+    print("First row length:", len(packet["packet_window"][0]))
+    print("Numpy shape     :", np.array(packet["packet_window"]).shape)
+    print("===========================\n")
+
     performance["AES-256-GCM Decryption"] = (
         time.perf_counter() - aes_start
     ) * 1000
@@ -511,41 +499,9 @@ def scan():
     packet_window
     )
 
-    # ===========================
-    # AUTOENCODER
-    # ===========================
+    print("Scaled shape:", np.array(scaled_packet).shape)
 
-    flat_packet = np.array(
-        scaled_packet
-    ).reshape(-1)
-
-    flat_packet_tensor = torch.tensor(
-        flat_packet,
-        dtype=torch.float32
-    ).view(
-        1,
-        WINDOW_SIZE * FEATURE_COUNT
-    )
-
-    ae_start = time.perf_counter()
-
-    with torch.no_grad():
-
-        reconstructed = autoencoder(
-        flat_packet_tensor
-    )
-
-        reconstruction_error = torch.mean(
-        (
-            flat_packet_tensor -
-            reconstructed
-        ) ** 2
-    ).item()
-
-    performance["Autoencoder Inference"] = (
-    time.perf_counter() - ae_start
-) * 1000
-
+    
     # ===========================
     # CNN-LSTM
     # ===========================
@@ -568,11 +524,25 @@ def scan():
 
     cnn_start = time.perf_counter()
 
-    with torch.no_grad():
+    cnn_start = time.perf_counter()
 
-         threat_score = edge_model(
-        x
-    ).item()
+    with torch.no_grad():
+         logits = edge_model(x)
+         threat_score = torch.sigmoid(logits).item()
+
+    performance["CNN-LSTM Inference"] = (
+         time.perf_counter() - cnn_start
+        ) * 1000
+
+    print("\n========== MODEL OUTPUT ==========")
+    print(f"Threat Score         : {threat_score:.6f}")
+    print(f"Threshold            : {THREAT_THRESHOLD}")
+    print(f"Ground Truth         : {data.get('actual_label')}")
+    print("==================================\n")
+
+    performance["CNN-LSTM Inference"] = (
+        time.perf_counter() - cnn_start
+    ) * 1000
 
     performance["CNN-LSTM Inference"] = (
     time.perf_counter() - cnn_start
@@ -582,9 +552,6 @@ def scan():
         f"[EDGE] Threat Score : {threat_score:.4f}"
     )
 
-    print(
-        f"[EDGE] Reconstruction Error : {reconstruction_error:.6f}"
-    )
 
     # ===========================
     # BENIGN TRAFFIC
@@ -593,10 +560,6 @@ def scan():
     if (
 
         threat_score < THREAT_THRESHOLD
-
-        and
-
-        reconstruction_error < RECONSTRUCTION_THRESHOLD
 
     ):
 
@@ -663,8 +626,6 @@ def scan():
 
                 "score":threat_score,
 
-                "reconstruction_error":reconstruction_error
-
             })
 
     # ===========================
@@ -693,16 +654,13 @@ def scan():
 
     print("----------------------------------------")
 
-    print("Autoencoder Analysis    : COMPLETE")
 
-    print(f"Reconstruction Error    : {reconstruction_error:.6f}")
 
     print("----------------------------------------")
 
     if (
     threat_score >= THREAT_THRESHOLD
-    or
-    reconstruction_error >= RECONSTRUCTION_THRESHOLD
+    
     ):
 
        print("Evidence Status         : ATTACK DETECTED")
@@ -763,8 +721,6 @@ def scan():
     "decision": decision,
 
     "threat_score": threat_score,
-
-    "reconstruction_error": reconstruction_error,
 
     "attack_count": registry.get_device(device_id)["attack_count"],
 
@@ -915,8 +871,6 @@ def scan():
 
     "threat_score": threat_score,
 
-    "reconstruction_error": reconstruction_error,
-
     "model_version": CURRENT_VERSION,
 
     # Blockchain Evidence
@@ -982,13 +936,22 @@ def scan():
         print("[EDGE] Cloud Offline")
         print("[EDGE] Summary Added To Retry Queue")
 
-    except requests.exceptions.HTTPError as e:
+    except requests.exceptions.HTTPError:
 
-        print("\n==================================================")
-        print("CLOUD SERVER ERROR")
-        print("==================================================")
-        print(response.text)
-        raise e
+     print("\n==================================================")
+     print("CLOUD SERVER ERROR")
+     print("==================================================")
+
+     print(response.text)
+
+    return jsonify({
+        "status": status,
+        "device": device_id,
+        "attack_count": registry.get_device(device_id)["attack_count"],
+        "evidence_hash": evidence_hash,
+        "score": threat_score,
+        "message": "Cloud returned HTTP 500"
+    })
 
 
     # ===========================
@@ -1093,8 +1056,6 @@ def scan():
     "evidence_hash": evidence_hash,
 
     "score": threat_score,
-
-    "reconstruction_error": reconstruction_error,
 
     "model_version": CURRENT_VERSION
 

@@ -7,7 +7,7 @@ venv/
 .venv/
 
 # Dataset
-#dataset/
+dataset/
 
 # Runtime files
 models/device_registry.json

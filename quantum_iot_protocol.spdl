@@ -1,0 +1,95 @@
+/*==========================================================
+  Quantum-Secure IoT IDS Protocol
+  For Scyther Verification
+
+  Project:
+  AI-Enabled Quantum Secure IoT IDS using
+  ML-KEM, AES-GCM, ML-DSA and Blockchain
+==========================================================*/
+
+hashfunction H;
+
+usertype SessionKey, Ciphertext, Signature, Evidence;
+
+protocol Quantum_IoT(Device, Gateway, Cloud)
+{
+
+role Device
+{
+    fresh Nd: Nonce;
+    fresh SK: SessionKey;
+    fresh Packet: Ticket;
+
+    var Ng: Nonce;
+
+    /* ML-KEM Key Exchange (symbolic) */
+    send_1(Device, Gateway,
+        {Device, Nd}pk(Gateway)
+    );
+
+    recv_2(Gateway, Device,
+        {Nd, Ng, SK}pk(Device)
+    );
+
+    /* AES-GCM Protected Packet (symbolic encryption) */
+    send_3(Device, Gateway,
+        {Packet}SK
+    );
+
+    claim(Device, Secret, SK);
+    claim(Device, Alive);
+    claim(Device, Weakagree);
+    claim(Device, Nisynch);
+}
+
+role Gateway
+{
+    var Nd: Nonce;
+    fresh Ng: Nonce;
+    fresh SK: SessionKey;
+
+    var Packet: Ticket;
+
+    recv_1(Device, Gateway,
+        {Device, Nd}pk(Gateway)
+    );
+
+    send_2(Gateway, Device,
+        {Nd, Ng, SK}pk(Device)
+    );
+
+    recv_3(Device, Gateway,
+        {Packet}SK
+    );
+
+    claim(Gateway, Secret, SK);
+    claim(Gateway, Alive);
+    claim(Gateway, Weakagree);
+    claim(Gateway, Nisynch);
+
+    /* Signed Evidence sent to Cloud */
+
+    send_4(Gateway, Cloud,
+        {
+            Packet,
+            H(Packet),
+            Gateway
+        }SK
+    );
+}
+
+role Cloud
+{
+    var Packet: Ticket;
+
+    recv_4(Gateway, Cloud,
+        {
+            Packet,
+            H(Packet),
+            Gateway
+        }SK;
+
+    claim(Cloud, Alive);
+}
+
+}

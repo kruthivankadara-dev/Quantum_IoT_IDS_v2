@@ -204,20 +204,13 @@ def retrain():
     # ===========================
 
     if data["type"] == "attack":
-
         packet = torch.tensor(
-
-            data["packet_window"],
-
-            dtype=torch.float32
-
-        ).view(
-
-            5,
-
-            FEATURE_COUNT
-
-        )
+    data["packet_window"],
+    dtype=torch.float32
+    ).view(
+    WINDOW_SIZE,
+    FEATURE_COUNT
+    )
 
         attack_x.append(
 
@@ -252,17 +245,11 @@ def retrain():
         for sample in samples:
 
             packet = torch.tensor(
-
-                sample,
-
-                dtype=torch.float32
-
+                   sample,
+                   dtype=torch.float32
             ).view(
-
-                5,
-
-                FEATURE_COUNT
-
+                 WINDOW_SIZE,
+                 FEATURE_COUNT
             )
 
             benign_x.append(
