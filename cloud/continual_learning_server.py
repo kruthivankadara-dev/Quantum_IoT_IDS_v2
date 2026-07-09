@@ -38,7 +38,8 @@ global_model = CNNLSTMModel()
 global_model.load_state_dict(
     torch.load(
         MODEL_PATH,
-        map_location="cpu"
+        map_location="cpu",
+        weights_only=False
     )
 )
 

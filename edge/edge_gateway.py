@@ -35,6 +35,7 @@ from security.aes_session import (
     decrypt_packet
 )
 from security.evidence_security import EvidenceSecurity
+from security import blockchain_client
 
 
 warnings.filterwarnings(
@@ -410,13 +411,9 @@ def scan():
         print("Reason           : Device Permanently Revoked")
 
         return jsonify({
-
-             "status":"revoked",
-
-              "device":device_id,
-
-              "message":"Device permanently blocked"
-
+            "status":"revoked",
+            "device":device_id,
+            "message":"Device permanently blocked"
         }), BLOCK_RESPONSE_CODE
 
     # ==========================================
@@ -883,23 +880,31 @@ def scan():
     "public_key": public_key
 }
 
-    # ===========================
-    # BLOCKCHAIN
-    # ===========================
-
     print("\n==================================================")
     print("BLOCKCHAIN")
     print("==================================================")
+    blockchain_status = "not_attempted"
+    blockchain_tx_id = None
 
-    print("Status : Pending Hyperledger Fabric")
+    blockchain_tx_id = f"TX-{device_id}-{int(evidence['timestamp'] * 1000)}"
+    blockchain_alert_id = f"ALERT-{device_id}-{int(evidence['timestamp'] * 1000)}"
 
-    print("TODO :")
-
-    print("- Store Signed Evidence")
-
-    print("- Update Trust Ledger")
-
-    print("- Store Audit Trail")
+    try:
+        submit_ms = blockchain_client.submit_record(
+            tx_id=blockchain_tx_id, device_id=device_id,
+            edge_cluster=EDGE_CLUSTER_ID, data_hash=evidence_hash, status="confirmed",
+        )
+        alert_ms = blockchain_client.raise_alert(
+            alert_id=blockchain_alert_id, tx_id=blockchain_tx_id, device_id=device_id,
+            severity=decision, description=f"score={threat_score:.4f}", flagged_by="edge-gateway-ids",
+        )
+        performance["Blockchain SubmitRecord"] = submit_ms
+        performance["Blockchain RaiseAlert"] = alert_ms
+        blockchain_status = "committed"
+        print(f"Status : COMMITTED ({submit_ms:.1f}ms + {alert_ms:.1f}ms)")
+    except Exception as e:   # widen from RuntimeError to Exception
+        blockchain_status = "failed"
+        print(f"Status : FAILED ({e})")
 
     # ===========================
     # SEND TO CLOUD
@@ -936,13 +941,13 @@ def scan():
         print("[EDGE] Cloud Offline")
         print("[EDGE] Summary Added To Retry Queue")
 
-    except requests.exceptions.HTTPError:
+    except requests.exceptions.HTTPError as e:
 
      print("\n==================================================")
      print("CLOUD SERVER ERROR")
      print("==================================================")
-
      print(response.text)
+     raise e
 
     return jsonify({
         "status": status,
