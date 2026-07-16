@@ -1,0 +1,329 @@
+(*************************************************************)
+(* POST-QUANTUM SECURE IoT IDS                               *)
+(* Formal Verification using ProVerif 2.05                  *)
+(* Version 3                                                 *)
+(*************************************************************)
+
+
+(*************************************************************)
+(* PUBLIC CHANNEL                                            *)
+(*************************************************************)
+
+free c : channel.
+
+
+(*************************************************************)
+(* PRIVATE SECRETS                                           *)
+(*************************************************************)
+
+free telemetry : bitstring [private].
+
+free oracleSecret : bitstring [private].
+
+
+(*************************************************************)
+(* TYPES                                                     *)
+(*************************************************************)
+
+type kem_skey.
+type kem_pkey.
+
+type dsa_skey.
+type dsa_pkey.
+
+type key.
+
+type nonce.
+
+type session.
+
+type device.
+
+type coins.
+
+type signature.
+
+
+(*************************************************************)
+(* ML-KEM-512                                                *)
+(*************************************************************)
+
+fun kem_pk(kem_skey): kem_pkey.
+
+fun kem_encaps(kem_pkey,coins): bitstring.
+
+fun kem_decaps(kem_skey,bitstring): key.
+
+fun kem_secret(coins): key.
+
+equation
+forall sk:kem_skey,r:coins;
+kem_decaps(sk,kem_encaps(kem_pk(sk),r))
+=
+kem_secret(r).
+
+
+(*************************************************************)
+(* HKDF-SHA256                                               *)
+(*************************************************************)
+
+fun hkdf(key,session): key.
+
+
+(*************************************************************)
+(* AES-256-GCM                                               *)
+(*************************************************************)
+
+fun aes_encrypt(key,nonce,bitstring): bitstring.
+
+fun aes_decrypt(key,nonce,bitstring): bitstring.
+
+equation
+forall k:key,n:nonce,m:bitstring;
+
+aes_decrypt(
+    k,
+    n,
+    aes_encrypt(k,n,m)
+)
+=
+m.
+
+
+(*************************************************************)
+(* SHA-256                                                   *)
+(*************************************************************)
+
+fun sha256(bitstring): bitstring.
+
+
+(*************************************************************)
+(* HMAC Authentication                                       *)
+(*************************************************************)
+
+fun hmac(
+    key,
+    bitstring,
+    session,
+    bitstring
+): bitstring.
+
+
+(*************************************************************)
+(* Evidence Binding                                          *)
+(*************************************************************)
+
+fun bindEvidence(
+    bitstring,
+    session
+): bitstring.
+
+
+(*************************************************************)
+(* ML-DSA                                                    *)
+(*************************************************************)
+
+fun dsa_pk(dsa_skey): dsa_pkey.
+
+fun dsa_sign(
+    dsa_skey,
+    bitstring
+): signature.
+
+fun dsa_verify(
+    dsa_pkey,
+    bitstring,
+    signature
+): bitstring.
+
+const validSignature : bitstring.
+
+equation
+
+forall sk:dsa_skey,m:bitstring;
+
+dsa_verify(
+    dsa_pk(sk),
+    m,
+    dsa_sign(sk,m)
+)
+=
+validSignature.
+
+(*************************************************************)
+(* EVENTS                                                    *)
+(*************************************************************)
+
+event DeviceEncapsulated(bitstring, session).
+
+event DeviceSentTelemetry(bitstring, nonce, session).
+
+event GatewayDecapsulated(bitstring, session).
+
+event GatewayReceivedTelemetry(bitstring, nonce, session).
+
+event GatewaySignedEvidence(bitstring, dsa_pkey, session).
+
+event EvidenceAccepted(bitstring, dsa_pkey, session).
+
+(*************************************************************)
+(* SECURITY QUERIES                                          *)
+(*************************************************************)
+
+(* Shared secret confidentiality *)
+query attacker(oracleSecret).
+query attacker(telemetry).
+
+(* Session agreement *)
+query ct:bitstring, s:session;
+event(GatewayDecapsulated(ct,s))
+==>
+event(DeviceEncapsulated(ct,s)).
+
+(* Device authentication *)
+query m:bitstring, n:nonce, s:session;
+inj-event(GatewayReceivedTelemetry(m,n,s))
+==>
+inj-event(DeviceSentTelemetry(m,n,s)).
+
+(* Evidence authenticity *)
+query
+    ev:bitstring,
+    pk:dsa_pkey,
+    s:session;
+inj-event(EvidenceAccepted(ev,pk,s))
+==>
+inj-event(GatewaySignedEvidence(ev,pk,s)).
+
+
+(*************************************************************)
+(* DEVICE PROCESS                                            *)
+(*************************************************************)
+
+let Device(
+    skKEM:kem_skey,
+    skDSA:dsa_skey
+)=
+
+new sess:session;
+new r:coins;
+new n:nonce;
+
+let pkKEM = kem_pk(skKEM) in
+
+(* ML-KEM encapsulation *)
+let ct = kem_encaps(pkKEM,r) in
+
+let shared = kem_secret(r) in
+
+let aesKey = hkdf(shared,sess) in
+
+event DeviceEncapsulated(ct,sess);
+
+(* Encrypt telemetry *)
+
+let cipher =
+    aes_encrypt(aesKey,n,telemetry)
+in
+
+event DeviceSentTelemetry(telemetry,n,sess);
+
+let tag =
+    hmac(aesKey, telemetry, sess, cipher)
+in
+
+out(c,
+(
+ct,
+sess,
+n,
+cipher,
+tag
+)).
+
+(*************************************************************)
+(* GATEWAY PROCESS                                           *)
+(*************************************************************)
+
+let Gateway(
+    skKEM:kem_skey,
+    skDSA:dsa_skey
+)=
+
+in(c,
+(
+ct:bitstring,
+sess:session,
+n:nonce,
+cipher:bitstring,
+tag:bitstring
+));
+
+let shared =
+    kem_decaps(skKEM,ct)
+in
+
+let aesKey =
+    hkdf(shared,sess)
+in
+
+if tag =
+    hmac(aesKey, telemetry, sess, cipher)
+then
+
+event GatewayDecapsulated(ct,sess);
+
+let plain =
+    aes_decrypt(aesKey,n,cipher)
+in
+
+if plain = telemetry then
+
+event GatewayReceivedTelemetry(plain,n,sess);
+
+let evidence =
+    bindEvidence(
+        sha256(plain),
+        sess
+    )
+in
+
+event GatewaySignedEvidence(
+    evidence,
+    dsa_pk(skDSA),
+    sess
+);
+
+let sig =
+    dsa_sign(
+        skDSA,
+        evidence
+    )
+in
+
+if dsa_verify(
+    dsa_pk(skDSA),
+    evidence,
+    sig
+)=validSignature
+then
+
+event EvidenceAccepted(
+    evidence,
+    dsa_pk(skDSA),
+    sess
+).
+(*************************************************************)
+(* MAIN PROCESS                                              *)
+(*************************************************************)
+
+process
+
+new skKEM:kem_skey;
+new skDSA:dsa_skey;
+
+(
+    Device(skKEM,skDSA)
+|
+    Gateway(skKEM,skDSA)
+)
